@@ -10,13 +10,16 @@ import json
 import re
 
 lower = re.compile(r'^([a-z]|_)*$')
+lower_upper = re.compile(r'^([a-zA-Z]|_)*$')
 lower_colon = re.compile(r'^([a-z]|_)*:([a-z]|_)*$')
+letters = re.compile(r'^([^\d|\W])*$',flags=re.UNICODE)
 problemchars = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
 
-street_type_re = re.compile(r'\b\S+\.?$', re.IGNORECASE)
+street_type_re = re.compile(r'\b\S+\.?$', flags=re.IGNORECASE|re.UNICODE)
 
 expected = ["Street", "Avenue", "Boulevard", "Drive", "Court", "Place", "Square", "Lane", "Road",
-            "Trail", "Parkway", "Commons"]
+            "Trail", "Parkway", "Commons", u"площа", u"провулок", u"узвіз", u"проспект", u"вулиця",
+            u"алея", u"шосе", u"переулок", u"проїзд", u"бульвар", u"дорога", u"набережна"]
 
 mapping = { "St": "Street",
             "St.": "Street",
@@ -31,38 +34,38 @@ def count_tags(filename):
     return tags
 
 
-def get_tags_stats(fmap, fstat):
-    with open(fstat,"wb") as fstat:
-        data = count_tags(fmap).items()
-        json.dump(data, fstat)
-        pprint.pprint(data)
-
-
-def key_type(element, keys):
+def key_type(element, keys, strangekeys):
     if element.tag == "tag":
         k = element.attrib['k']
-        if lower.match(k) != None:
-            keys['lower'] += 1
+
+        for char in k:
+            if problemchars.match(char) != None:
+                keys['problemchars'] += 1
+                strangekeys.append(('problemchars',k,element.attrib['v']))
+                return
+
+        if letters.match(k) != None:
+            if lower.match(k) != None:
+                keys['lower'] += 1
+            elif lower_upper.match(k) != None:
+                keys['lower_upper'] += 1
+            else: # non-latin letters
+                keys['nonlatin'] += 1
+                strangekeys.append(('nonlatin',k,element.attrib['v']))
         elif lower_colon.match(k) != None:
             keys['lower_colon'] += 1
         else:
-            for char in k:
-                if problemchars.match(char) != None:
-                    keys['problemchars'] += 1
-                    print "problem key=", k, " value=", element.attrib['v']
-                    break
-            else:
-                keys['other'] += 1
-                print k
+            keys['other'] += 1
 
-    return keys
+    return
 
-
+#check usertags for validity
 def check_keys(filename):
-    keys = {"lower": 0, "lower_colon": 0, "problemchars": 0, "other": 0}
+    countkeys = {"lower": 0, "lower_upper" : 0, "lower_colon": 0, "nonlatin" : 0, "problemchars": 0, "other": 0}
+    strangekeys = []
     for _, element in ET.iterparse(filename):
-        keys = key_type(element, keys)
-    return keys
+        key_type(element, countkeys, strangekeys)
+    return countkeys, strangekeys
 
 
 def get_unique_users(filename):
@@ -89,7 +92,6 @@ def audit(osmfile):
     osm_file = open(osmfile, "r")
     street_types = defaultdict(set)
     for event, elem in ET.iterparse(osm_file, events=("start",)):
-
         if elem.tag == "node" or elem.tag == "way":
             for tag in elem.iter("tag"):
                 if is_street_name(tag):
@@ -106,24 +108,68 @@ def update_name(name, mapping):
 #endregion check street names section
 
 
+def get_stats(filename):
+    tag_stats = defaultdict(int) #tags statistics - which data we can expect to have in the map
+    countkeys = {"lower": 0, "lower_upper" : 0, "lower_colon": 0, "nonlatin" : 0, "problemchars": 0, "other": 0}
+    strangekeys = []
+    users = set()
+    street_types = defaultdict(set)
+    for event, el in ET.iterparse(filename,events=("start",)):
+        tag_stats[el.tag] += 1
+        key_type(el, countkeys, strangekeys) #check usertags for validity
+        if 'uid' in el.attrib:
+            users.add(el.attrib['uid'])
+        if event == "start" and (el.tag == "node" or el.tag == "way"):
+            for tag in el.iter("tag"):
+                if is_street_name(tag):
+                    audit_street_type(street_types, tag.attrib['v'])
+
+    return tag_stats, {'countkeys' : countkeys, 'strangekeys' : strangekeys}, users, street_types
+
+
+def save_stats(filename, stats):
+    import csv
+
+    tags_stats, keys_stats, unq_users, street_types = stats
+    print street_types
+    with open(filename, 'wb') as f:
+        w = csv.writer(f)
+
+        w.writerow(('Unique users quantity: {}'.format(len(unq_users)),))
+        w.writerow('')
+
+        w.writerow(('Tags Statistics:',))
+        w.writerow(tags_stats.keys())
+        w.writerow([val for key, val in tags_stats.items()])
+        w.writerow('')
+
+        w.writerow(('Keys Statistics:',))
+        stat = keys_stats['countkeys']
+        w.writerow(stat.keys())
+        w.writerow([stat[key] for key in stat])
+        w.writerow('')
+
+        w.writerow(('Strange Keys:',))
+        w.writerow(('Type','Key','Value'))
+        for row in keys_stats['strangekeys']:
+            w.writerow([el.encode('utf-8') for el in row])
+        w.writerow('')
+
+        w.writerow(('Unexpected Street Types: {}'.format(len(street_types)),))
+        w.writerow(('Found type','Value example'))
+        for key, val in street_types.items():
+            w.writerow((key.encode('utf-8'),tuple(val)[0].encode('utf-8')))
+        w.writerow('')
+
+
 if __name__ == "__main__":
     with open("filename.txt", "rb") as f:
         fmap = f.read()
 
         start = time.time()
-        #tags statistics - which data we can expect to have in the map
-        #get_tags_stats(fmap, "tags_statistics.txt")
 
-        #check subtags for validity
-        #pprint.pprint(check_keys(fmap))
+        statfile = "statistics.csv"
+        save_stats(statfile, get_stats(fmap))
 
-        #count unique users
-        #pprint.pprint(len(get_unique_users(fmap)))
-
-        #audit street names
-        #pprint.pprint(audit(fmap))
-        #TODO support utf-8 street names
-        m = street_type_re.search("jphn street")
-        print m
         end = time.time()
         print "finished in %d seconds!" % (end-start)
