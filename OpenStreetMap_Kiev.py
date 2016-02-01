@@ -8,6 +8,7 @@ import pprint
 import time
 import json
 import re
+import codecs
 
 lower = re.compile(r'^([a-z]|_)*$')
 lower_upper = re.compile(r'^([a-zA-Z]|_)*$')
@@ -15,17 +16,22 @@ lower_colon = re.compile(r'^([a-z]|_)*:([a-z]|_)*$')
 letters = re.compile(r'^([^\d|\W])*$',flags=re.UNICODE)
 problemchars = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
 
-street_type_re = re.compile(r'\b\S+\.?$', flags=re.IGNORECASE|re.UNICODE)
+street_type_after_re = re.compile(r'\b\S+\.?$', flags=re.IGNORECASE | re.UNICODE)
+street_type_before_re = re.compile(r'^\S+[\.|\s]', flags=re.IGNORECASE | re.UNICODE)
 
 expected = ["Street", "Avenue", "Boulevard", "Drive", "Court", "Place", "Square", "Lane", "Road",
             "Trail", "Parkway", "Commons", u"площа", u"провулок", u"узвіз", u"проспект", u"вулиця",
-            u"алея", u"шосе", u"переулок", u"проїзд", u"бульвар", u"дорога", u"набережна"]
+            u"алея", u"шосе", u"переулок", u"проїзд", u"бульвар", u"дорога", u"набережна", u"улица"]
 
 mapping = { "St": "Street",
             "St.": "Street",
             "Ave" : "Avenue",
-            "Rd." : "Road"
+            "Rd." : "Road",
+            u"вул." : u"вулиця",
+            u"ул." : u"улица"
             }
+
+CREATED = [ "version", "changeset", "timestamp", "user", "uid"]
 
 def count_tags(filename):
     tags = defaultdict(int)
@@ -77,7 +83,7 @@ def get_unique_users(filename):
 
 #region check street names section
 def audit_street_type(street_types, street_name):
-    m = street_type_re.search(street_name)
+    m = street_type_after_re.search(street_name)
     if m:
         street_type = m.group()
         if street_type not in expected:
@@ -99,13 +105,78 @@ def audit(osmfile):
 
     return street_types
 
+# TODO if street's name is one word only, add street type at the end of it
+def change_streettype_place(name):
+    streettype = street_type_before_re.search(name)
+    if streettype != None:
+        streettype = streettype.group().rstrip()
+        if streettype in mapping:
+            streettype = mapping[streettype]
+        if streettype in expected:
+            return name.replace(streettype,'').lstrip()+' '+streettype
+    return name
+
 
 def update_name(name, mapping):
-    short = street_type_re.search(name).group()
+    short = street_type_after_re.search(name).group()
     full = mapping[short]
     return name.replace(short,full)
 
 #endregion check street names section
+
+
+def shape_element(element):
+    node = {}
+    if element.tag == "node" or element.tag == "way" :
+        # node['type'] = element.tag
+        # node['created'] = {}
+        # node['pos'] = []
+        node = {'type' : element.tag, 'created' : {}, 'pos' : [] }
+        for attr in element.attrib:
+            if attr in CREATED:
+                node['created'][attr] = element.attrib[attr]
+            elif attr not in ('lat','lon'):
+                node[attr] = element.attrib[attr]
+        if 'lat' in element.attrib:
+            node['pos'].append(float(element.attrib['lat']))
+            node['pos'].append(float(element.attrib['lon']))
+        for tag in element.iter('tag'):
+            k = tag.attrib['k']
+            if problemchars.search(k) == None:
+                if k.startswith('addr:'):
+                    if 'address' not in node:
+                        node['address'] = {}
+                    addr_key = k.split(':')
+                    if len(addr_key) == 2:
+                        node['address'][addr_key[1]] = tag.attrib['v']
+                else:
+                    node[k] = tag.attrib['v']
+
+        if element.tag == "way":
+            node_refs = []
+            for nd in element.iter('nd'):
+                node_refs.append(nd.attrib['ref'])
+            if len(node_refs)>0:
+                node['node_refs'] = node_refs
+
+        return node
+    else:
+        return None
+
+
+def process_map(file_in, pretty = False):
+    file_out = "{0}.json".format(file_in)
+    data = []
+    with codecs.open(file_out, "w") as fo:
+        for _, element in ET.iterparse(file_in):
+            el = shape_element(element)
+            if el:
+                data.append(el)
+                if pretty:
+                    fo.write(json.dumps(el, indent=2)+"\n")
+                else:
+                    fo.write(json.dumps(el) + "\n")
+    return data
 
 
 def get_stats(filename):
@@ -163,6 +234,10 @@ def save_stats(filename, stats):
 
 
 if __name__ == "__main__":
+
+    name = u"Дмитровская"
+    print change_streettype_place(name)
+    """
     with open("filename.txt", "rb") as f:
         fmap = f.read()
 
@@ -171,5 +246,8 @@ if __name__ == "__main__":
         statfile = "statistics.csv"
         save_stats(statfile, get_stats(fmap))
 
+
+
         end = time.time()
         print "finished in %d seconds!" % (end-start)
+    """
