@@ -19,15 +19,10 @@ problemchars = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
 street_type_after_re = re.compile(r'\b\S+\.?$', flags=re.IGNORECASE | re.UNICODE)
 street_type_before_re = re.compile(r'^\S+[\.|\s]', flags=re.IGNORECASE | re.UNICODE)
 
-expected = ["Street", "Avenue", "Boulevard", "Drive", "Court", "Place", "Square", "Lane", "Road",
-            "Trail", "Parkway", "Commons", u"площа", u"провулок", u"узвіз", u"проспект", u"вулиця",
-            u"алея", u"шосе", u"переулок", u"проїзд", u"бульвар", u"дорога", u"набережна", u"улица"]
+expected = [u"площа", u"провулок", u"узвіз", u"проспект", u"вулиця",
+            u"алея", u"шосе", u"переулок", u"проїзд", u"бульвар", u"дорога", u"набережна", u"улица", u"шлях"]
 
-mapping = { "St": "Street",
-            "St.": "Street",
-            "Ave" : "Avenue",
-            "Rd." : "Road",
-            u"вул." : u"вулиця",
+mapping = { u"вул." : u"вулиця",
             u"ул." : u"улица"
             }
 
@@ -86,7 +81,7 @@ def audit_street_type(street_types, street_name):
     m = street_type_after_re.search(street_name)
     if m:
         street_type = m.group()
-        if street_type not in expected:
+        if street_type.lower() not in expected:
             street_types[street_type].add(street_name)
 
 
@@ -105,16 +100,42 @@ def audit(osmfile):
 
     return street_types
 
-# TODO if street's name is one word only, add street type at the end of it
+
 def change_streettype_place(name):
     streettype = street_type_before_re.search(name)
     if streettype != None:
         streettype = streettype.group().rstrip()
         if streettype in mapping:
             streettype = mapping[streettype]
-        if streettype in expected:
+        if streettype.lower() in expected:
             return name.replace(streettype,'').lstrip()+' '+streettype
+
     return name
+
+
+def add_streettype_to(name):
+    if len(name.split()) == 1:
+        if name[-2:] == u"ая":
+            return  name + u" улица"
+        elif name[-1] == u"а":
+            return  name + u" вулиця"
+    return name
+
+# convert <tag k="addr:housenumber" v="15/4"/><tag k="addr:street" v="Хрещатик/Заньковецкої"/>
+# to    <tag k="addr:housenumber" v="15"/><tag k="addr:street" v="Хрещатик"/>
+#       <tag k="addr:housenumber2" v="4"/><tag k="addr:street2" v="Заньковецкої"/>
+
+# TODO streetname checking and updating
+def shape_address(node, house, street):
+    streets = street.split('/')
+    for i in range(len(streets)):
+        node["street{}".format('' if i == 0 else i+1)] = streets[i]
+    if len(streets) > 1: # keep in mind houses with a double number at one street
+        houses = house.split('/')
+        for i in range(len(houses)):
+            node["housenumber{}".format('' if i == 0 else i+1)] = houses[i]
+
+# TODO get translit values, divide the addr tag with a house number into addr:street and addr:housenumber
 
 
 def update_name(name, mapping):
@@ -140,18 +161,26 @@ def shape_element(element):
         if 'lat' in element.attrib:
             node['pos'].append(float(element.attrib['lat']))
             node['pos'].append(float(element.attrib['lon']))
+        house = street = ''
         for tag in element.iter('tag'):
             k = tag.attrib['k']
+
             if problemchars.search(k) == None:
                 if k.startswith('addr:'):
                     if 'address' not in node:
                         node['address'] = {}
                     addr_key = k.split(':')
                     if len(addr_key) == 2:
-                        node['address'][addr_key[1]] = tag.attrib['v']
+                        addr_subkey = addr_key[1]
+                        if addr_subkey == "housenumber":
+                            house = tag.attrib['v']
+                        elif addr_subkey == "street":
+                            street = tag.attrib['v']
+                        else:
+                            node['address'][addr_subkey] = tag.attrib['v']
                 else:
                     node[k] = tag.attrib['v']
-
+        shape_address(node['address'], house, street)
         if element.tag == "way":
             node_refs = []
             for nd in element.iter('nd'):
@@ -193,7 +222,7 @@ def get_stats(filename):
         if event == "start" and (el.tag == "node" or el.tag == "way"):
             for tag in el.iter("tag"):
                 if is_street_name(tag):
-                    audit_street_type(street_types, tag.attrib['v'])
+                    audit_street_type(street_types, add_streettype_to(change_streettype_place(tag.attrib['v'])))
 
     return tag_stats, {'countkeys' : countkeys, 'strangekeys' : strangekeys}, users, street_types
 
@@ -235,9 +264,14 @@ def save_stats(filename, stats):
 
 if __name__ == "__main__":
 
-    name = u"Дмитровская"
-    print change_streettype_place(name)
-    """
+    #name = u"Урлівська"
+    #print add_streettype_to(change_streettype_place(name))
+
+    address = {}
+    shape_address(address,'15/4',u'Хрещатик/Заньковецкої')
+    for el in address:
+        print el, address[el]
+"""
     with open("filename.txt", "rb") as f:
         fmap = f.read()
 
@@ -250,4 +284,4 @@ if __name__ == "__main__":
 
         end = time.time()
         print "finished in %d seconds!" % (end-start)
-    """
+"""
