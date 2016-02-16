@@ -9,6 +9,7 @@ import time
 import json
 import re
 import codecs
+#from transliterate import translit, get_available_language_codes
 
 lower = re.compile(r'^([a-z]|_)*$')
 lower_upper = re.compile(r'^([a-zA-Z]|_)*$')
@@ -25,6 +26,8 @@ expected = [u"площа", u"провулок", u"узвіз", u"проспек�
 mapping = { u"вул." : u"вулиця",
             u"ул." : u"улица"
             }
+
+
 
 CREATED = [ "version", "changeset", "timestamp", "user", "uid"]
 
@@ -100,6 +103,12 @@ def audit(osmfile):
 
     return street_types
 
+class Address:
+    housenumber =[]
+    streetname = []
+
+    def __init__(self, dirty_streetname, dirty_housenumber):
+        # TODO add address cleaning logic
 
 def change_streettype_place(name):
     streettype = street_type_before_re.search(name)
@@ -117,25 +126,28 @@ def add_streettype_to(name):
     if len(name.split()) == 1:
         if name[-2:] == u"ая":
             return  name + u" улица"
-        elif name[-1] == u"а":
+        elif name[-1] in (u"а", u"ї") or name[-2:] == u"ик":
             return  name + u" вулиця"
     return name
 
-# convert <tag k="addr:housenumber" v="15/4"/><tag k="addr:street" v="Хрещатик/Заньковецкої"/>
-# to    <tag k="addr:housenumber" v="15"/><tag k="addr:street" v="Хрещатик"/>
-#       <tag k="addr:housenumber2" v="4"/><tag k="addr:street2" v="Заньковецкої"/>
-
-# TODO streetname checking and updating
+# convert "15/4","Хрещатик/Заньковецкої"
+# to   addr["housenumber"]="15", addr["street"]="Хрещатик вулиця",
+#      addr["housenumber2"]="4"addr["street2"]="Заньковецкої вулиця"
 def shape_address(node, house, street):
     streets = street.split('/')
     for i in range(len(streets)):
-        node["street{}".format('' if i == 0 else i+1)] = streets[i]
+        node["street{}".format('' if i == 0 else i+1)] = add_streettype_to(streets[i])
     if len(streets) > 1: # keep in mind houses with a double number at one street
         houses = house.split('/')
         for i in range(len(houses)):
             node["housenumber{}".format('' if i == 0 else i+1)] = houses[i]
 
+
 # TODO get translit values, divide the addr tag with a house number into addr:street and addr:housenumber
+def restore_translit(name):
+    if lower.match(name) == None:
+        return name
+
 
 
 def update_name(name, mapping):
@@ -267,10 +279,18 @@ if __name__ == "__main__":
     #name = u"Урлівська"
     #print add_streettype_to(change_streettype_place(name))
 
-    address = {}
-    shape_address(address,'15/4',u'Хрещатик/Заньковецкої')
-    for el in address:
-        print el, address[el]
+    # address = {}
+    # shape_address(address,'15/4',u'Хрещатик/Заньковецкої')
+    # for el in address:
+    #     print el, address[el]
+
+
+    #print translit("zhylianskaya", 'ru')
+
+    from mytranslit import translit2ru, translit2uk
+    print translit2ru("zhylianskaya")
+    print translit2uk("Gogolevska")
+    # TODO заменить гоголевску страду на Гоголівська вулиця
 """
     with open("filename.txt", "rb") as f:
         fmap = f.read()
