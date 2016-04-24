@@ -10,6 +10,7 @@ import json
 import re
 import codecs
 #from transliterate import translit, get_available_language_codes
+# TODO this is test row
 
 lower = re.compile(r'^([a-z]|_)*$')
 lower_upper = re.compile(r'^([a-zA-Z]|_)*$')
@@ -109,6 +110,8 @@ class Address:
 
     def __init__(self, dirty_streetname, dirty_housenumber):
         # TODO add address cleaning logic
+        housenumber =
+
 
 def change_streettype_place(name):
     streettype = street_type_before_re.search(name)
